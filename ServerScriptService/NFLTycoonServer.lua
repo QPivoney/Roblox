@@ -216,7 +216,7 @@ atmosphere.Glare = 0.2
 atmosphere.Haze = 1.5
 atmosphere.Parent = Lighting
 
-local colorCorrection = Instance.new("ColorCorrection")
+local colorCorrection = Instance.new("ColorCorrectionEffect")
 colorCorrection.Saturation = 0.15
 colorCorrection.Contrast = 0.05
 colorCorrection.Parent = Lighting
