@@ -32,6 +32,7 @@ local MarketplaceService = game:GetService("MarketplaceService")
 local TextService = game:GetService("TextService")
 local Lighting = game:GetService("Lighting")
 local SoundService = game:GetService("SoundService")
+local RunService = game:GetService("RunService")
 
 -- Wrapped in pcall: if DataStores aren't reachable (Studio testing without
 -- "Enable Studio Access to API Services" turned on, or a brand-new unpublished
@@ -202,10 +203,13 @@ remotes.GetLeaderboardTop = getLeaderboardFn
 -- STADIUM ATMOSPHERE (global lighting mood, one-time setup)
 ----------------------------------------------------------------
 
-Lighting.ClockTime = 18
-Lighting.Brightness = 2
-Lighting.Ambient = Color3.fromRGB(40, 40, 55)
-Lighting.OutdoorAmbient = Color3.fromRGB(70, 70, 90)
+Lighting.ClockTime = 19
+Lighting.Brightness = 2.5
+Lighting.Ambient = Color3.fromRGB(35, 38, 50)
+Lighting.OutdoorAmbient = Color3.fromRGB(60, 65, 85)
+Lighting.EnvironmentSpecularScale = 1
+Lighting.EnvironmentDiffuseScale = 0.35
+Lighting.ShadowSoftness = 0.2
 
 local atmosphere = Instance.new("Atmosphere")
 atmosphere.Density = 0.3
@@ -217,9 +221,21 @@ atmosphere.Haze = 1.5
 atmosphere.Parent = Lighting
 
 local colorCorrection = Instance.new("ColorCorrectionEffect")
-colorCorrection.Saturation = 0.15
-colorCorrection.Contrast = 0.05
+colorCorrection.Saturation = 0.2
+colorCorrection.Contrast = 0.08
+colorCorrection.TintColor = Color3.fromRGB(245, 250, 255)
 colorCorrection.Parent = Lighting
+
+local bloom = Instance.new("BloomEffect")
+bloom.Intensity = 0.55
+bloom.Size = 24
+bloom.Threshold = 1.1
+bloom.Parent = Lighting
+
+local sunRays = Instance.new("SunRaysEffect")
+sunRays.Intensity = 0.15
+sunRays.Spread = 0.5
+sunRays.Parent = Lighting
 
 ----------------------------------------------------------------
 -- RUNTIME STATE
@@ -322,9 +338,12 @@ local function playerOwnsPass(player, passId)
 end
 
 -- Tracks parts on a plot whose color follows the owner's chosen jersey color
--- (as opposed to the plot's fixed structural color).
-local function registerAccent(plot, part)
-	table.insert(plot.accentParts, part)
+-- (as opposed to the plot's fixed structural color). Floor accents are wiped
+-- and rebuilt every time floors are torn down (release/prestige); permanent
+-- accents (the entrance monument) live for the plot's entire lifetime.
+local function registerAccent(plot, part, permanent)
+	local list = permanent and plot.permanentAccents or plot.accentParts
+	table.insert(list, part)
 	part.BrickColor = plot.jerseyColor
 end
 
@@ -333,6 +352,11 @@ local function applyTeamCosmetics(plot, data)
 	plot.jerseyColor = preset.color
 
 	for _, part in ipairs(plot.accentParts) do
+		if part and part.Parent then
+			part.BrickColor = plot.jerseyColor
+		end
+	end
+	for _, part in ipairs(plot.permanentAccents) do
 		if part and part.Parent then
 			part.BrickColor = plot.jerseyColor
 		end
@@ -451,6 +475,169 @@ local function addStadiumLights(floorModel, origin, y, half)
 		spot.Angle = 90
 		spot.Face = Enum.NormalId.Bottom
 		spot.Parent = lightHead
+	end
+end
+
+----------------------------------------------------------------
+-- BUILDING SHELL (modern dark facade + neon team trim + an actual door)
+----------------------------------------------------------------
+
+local DOOR_WIDTH = 10
+local DOOR_HEIGHT = 10
+
+-- Only floor 1's front wall needs a real opening — every floor above it is
+-- reached from the interior staircase, never from outside.
+local function buildFrontWallWithDoor(floorModel, origin, wallY, wallHeight, half, wallColor, plot)
+	local segWidth = half - DOOR_WIDTH / 2
+	local segCenter = DOOR_WIDTH / 2 + segWidth / 2
+	local wallBottom = wallY - wallHeight / 2
+
+	newPart(Vector3.new(segWidth, wallHeight, 1), origin * CFrame.new(-segCenter, wallY, -half), wallColor, floorModel, Enum.Material.Metal)
+	newPart(Vector3.new(segWidth, wallHeight, 1), origin * CFrame.new(segCenter, wallY, -half), wallColor, floorModel, Enum.Material.Metal)
+
+	local topSegHeight = wallHeight - DOOR_HEIGHT
+	if topSegHeight > 0 then
+		newPart(
+			Vector3.new(DOOR_WIDTH + 2, topSegHeight, 1),
+			origin * CFrame.new(0, wallBottom + DOOR_HEIGHT + topSegHeight / 2, -half),
+			wallColor,
+			floorModel,
+			Enum.Material.Metal
+		)
+	end
+
+	local lintelY = wallBottom + DOOR_HEIGHT + 0.75
+	newPart(Vector3.new(DOOR_WIDTH + 2.4, 1.5, 1.2), origin * CFrame.new(0, lintelY, -half), wallColor, floorModel, Enum.Material.Metal)
+
+	local leftJamb = newPart(
+		Vector3.new(0.6, DOOR_HEIGHT, 1.3),
+		origin * CFrame.new(-DOOR_WIDTH / 2, wallBottom + DOOR_HEIGHT / 2, -half),
+		plot.jerseyColor,
+		floorModel,
+		Enum.Material.Neon
+	)
+	local rightJamb = newPart(
+		Vector3.new(0.6, DOOR_HEIGHT, 1.3),
+		origin * CFrame.new(DOOR_WIDTH / 2, wallBottom + DOOR_HEIGHT / 2, -half),
+		plot.jerseyColor,
+		floorModel,
+		Enum.Material.Neon
+	)
+	registerAccent(plot, leftJamb)
+	registerAccent(plot, rightJamb)
+
+	local signPart = newPart(
+		Vector3.new(DOOR_WIDTH, 1.2, 0.3),
+		origin * CFrame.new(0, lintelY + 1.4, -half),
+		plot.jerseyColor,
+		floorModel,
+		Enum.Material.Neon
+	)
+	registerAccent(plot, signPart)
+	newBillboard(signPart, "ENTRANCE", 140)
+end
+
+local function addWallWithTrim(floorModel, origin, wallY, wallHeight, size, cf, wallColor, trimSize, plot)
+	newPart(size, origin * cf, wallColor, floorModel, Enum.Material.Metal)
+	local trim = newPart(trimSize, origin * cf * CFrame.new(0, wallHeight / 2 - 0.3, 0), plot.jerseyColor, floorModel, Enum.Material.Neon)
+	registerAccent(plot, trim)
+end
+
+-- Dark modern shell for a floor: slate arena floor with a team-color center
+-- emblem and glowing edge border, dark metal walls with a glowing top trim,
+-- and corner pillars capped with a neon ring. Floor 1 gets a real doorway.
+local function buildFloorShell(floorModel, origin, y, half, plot, floorIndex)
+	local platform = newPart(
+		Vector3.new(PLOT_SIZE, 1, PLOT_SIZE),
+		origin * CFrame.new(0, y, 0),
+		BrickColor.new("Smoky grey"),
+		floorModel,
+		Enum.Material.Slate
+	)
+	platform.Name = "Platform"
+
+	local emblem = newPart(
+		Vector3.new(0.2, 16, 16),
+		origin * CFrame.new(0, y + 0.6, 0),
+		plot.color,
+		floorModel,
+		Enum.Material.Neon
+	)
+	emblem.Shape = Enum.PartType.Cylinder
+	emblem.Orientation = Vector3.new(0, 0, 90)
+
+	local edges = {
+		{ size = Vector3.new(PLOT_SIZE, 0.3, 0.6), cf = CFrame.new(0, 0.65, -half + 0.3) },
+		{ size = Vector3.new(PLOT_SIZE, 0.3, 0.6), cf = CFrame.new(0, 0.65, half - 0.3) },
+		{ size = Vector3.new(0.6, 0.3, PLOT_SIZE), cf = CFrame.new(-half + 0.3, 0.65, 0) },
+		{ size = Vector3.new(0.6, 0.3, PLOT_SIZE), cf = CFrame.new(half - 0.3, 0.65, 0) },
+	}
+	for _, edge in ipairs(edges) do
+		local border = newPart(edge.size, origin * CFrame.new(0, y, 0) * edge.cf, plot.jerseyColor, floorModel, Enum.Material.Neon)
+		registerAccent(plot, border)
+	end
+
+	local wallHeight = FLOOR_HEIGHT - 2
+	local wallY = y + 0.5 + wallHeight / 2
+	local wallColor = BrickColor.new("Dark stone grey")
+
+	if floorIndex == 1 then
+		buildFrontWallWithDoor(floorModel, origin, wallY, wallHeight, half, wallColor, plot)
+	else
+		addWallWithTrim(
+			floorModel, origin, wallY, wallHeight,
+			Vector3.new(PLOT_SIZE, wallHeight, 1), CFrame.new(0, wallY, -half),
+			wallColor, Vector3.new(PLOT_SIZE, 0.6, 1.05), plot
+		)
+	end
+
+	addWallWithTrim(
+		floorModel, origin, wallY, wallHeight,
+		Vector3.new(PLOT_SIZE, wallHeight, 1), CFrame.new(0, wallY, half),
+		wallColor, Vector3.new(PLOT_SIZE, 0.6, 1.05), plot
+	)
+	addWallWithTrim(
+		floorModel, origin, wallY, wallHeight,
+		Vector3.new(1, wallHeight, PLOT_SIZE), CFrame.new(-half, wallY, 0),
+		wallColor, Vector3.new(1.05, 0.6, PLOT_SIZE), plot
+	)
+	addWallWithTrim(
+		floorModel, origin, wallY, wallHeight,
+		Vector3.new(1, wallHeight, PLOT_SIZE), CFrame.new(half, wallY, 0),
+		wallColor, Vector3.new(1.05, 0.6, PLOT_SIZE), plot
+	)
+
+	local corners = {
+		{ x = -half, z = -half },
+		{ x = half, z = -half },
+		{ x = -half, z = half },
+		{ x = half, z = half },
+	}
+	for _, c in ipairs(corners) do
+		newPart(Vector3.new(2, wallHeight, 2), origin * CFrame.new(c.x, wallY, c.z), BrickColor.new("Really black"), floorModel, Enum.Material.Metal)
+		local ring = newPart(
+			Vector3.new(2.4, 0.4, 2.4),
+			origin * CFrame.new(c.x, wallY + wallHeight / 2 - 1, c.z),
+			plot.jerseyColor,
+			floorModel,
+			Enum.Material.Neon
+		)
+		registerAccent(plot, ring)
+	end
+
+	-- A big illuminated team crest on the ground floor's exterior face —
+	-- this is the plot's "curb appeal" signature, visible from the plaza.
+	if floorIndex == 1 then
+		local crest = newPart(
+			Vector3.new(0.6, 10, 10),
+			origin * CFrame.new(0, wallY + 3, -half - 0.6),
+			plot.jerseyColor,
+			floorModel,
+			Enum.Material.Neon
+		)
+		crest.Shape = Enum.PartType.Cylinder
+		crest.Orientation = Vector3.new(0, 90, 0) -- faces forward along Z, not up
+		registerAccent(plot, crest)
 	end
 end
 
@@ -767,6 +954,7 @@ local function createBasePlot(index)
 	local originX = (index - 1) * PLOT_SPACING
 	local origin = CFrame.new(originX, 0, 0)
 	local color = TEAM_COLORS[((index - 1) % #TEAM_COLORS) + 1]
+	local half = PLOT_SIZE / 2
 
 	local model = Instance.new("Model")
 	model.Name = "TeamPlot_" .. index
@@ -780,16 +968,96 @@ local function createBasePlot(index)
 	)
 	pad.Name = "Pad"
 
+	local plot = {
+		index = index,
+		origin = origin,
+		color = color,
+		jerseyColor = color,
+		model = model,
+		sign = nil,
+		signLabel = nil,
+		owner = nil,             -- userId
+		ownerPlayer = nil,       -- Player instance
+		currentFloor = 0,
+		dropperConnections = {}, -- [floorIndex] = true/false running flag
+		floorParts = {},         -- [floorIndex] = Model
+		accentParts = {},        -- floor-level parts that follow the jersey color
+		permanentAccents = {},   -- monument parts that follow the jersey color for the plot's whole lifetime
+		trophyLabel = nil,
+	}
+
+	-- Entrance monument, standing clear of the doorway (built later, on floor 1)
+	-- instead of blocking it. A lit walkway connects it to the building face.
+	local monumentZ = -half - 8
+
+	newPart(
+		Vector3.new(14, 0.3, 8),
+		origin * CFrame.new(0, BASE_HEIGHT + 0.15, -half - 4),
+		BrickColor.new("Medium stone grey"),
+		model,
+		Enum.Material.Concrete
+	)
+	local walkEdge1 = newPart(Vector3.new(14, 0.15, 0.4), origin * CFrame.new(0, BASE_HEIGHT + 0.35, -half - 0.2), color, model, Enum.Material.Neon)
+	local walkEdge2 = newPart(Vector3.new(14, 0.15, 0.4), origin * CFrame.new(0, BASE_HEIGHT + 0.35, -half - 7.8), color, model, Enum.Material.Neon)
+	registerAccent(plot, walkEdge1, true)
+	registerAccent(plot, walkEdge2, true)
+
+	newPart(
+		Vector3.new(8, 2, 4),
+		origin * CFrame.new(0, BASE_HEIGHT + 1, monumentZ),
+		BrickColor.new("Really black"),
+		model,
+		Enum.Material.Basalt
+	)
+
 	local sign = newPart(
 		Vector3.new(6, 8, 1),
-		origin * CFrame.new(0, BASE_HEIGHT + 4, -PLOT_SIZE / 2 + 2),
+		origin * CFrame.new(0, BASE_HEIGHT + 2 + 4, monumentZ),
 		color,
-		model
+		model,
+		Enum.Material.SmoothPlastic
 	)
 	sign.Name = "ClaimSign"
 	sign.Anchored = true
 
 	local _, label = newBillboard(sign, "UNCLAIMED\nTeam Plot " .. index, 220)
+
+	local crest = newPart(
+		Vector3.new(3.4, 3.4, 0.4),
+		origin * CFrame.new(0, BASE_HEIGHT + 2 + 8.3, monumentZ),
+		color,
+		model,
+		Enum.Material.Neon
+	)
+	crest.Shape = Enum.PartType.Cylinder
+	crest.Orientation = Vector3.new(0, 90, 0)
+	registerAccent(plot, crest, true)
+
+	for _, side in ipairs({ -1, 1 }) do
+		local postX = side * 6
+		newPart(
+			Vector3.new(0.8, 6, 0.8),
+			origin * CFrame.new(postX, BASE_HEIGHT + 3, monumentZ + 2),
+			BrickColor.new("Really black"),
+			model,
+			Enum.Material.Metal
+		)
+		local lightOrb = newPart(
+			Vector3.new(1.4, 1.4, 1.4),
+			origin * CFrame.new(postX, BASE_HEIGHT + 6, monumentZ + 2),
+			color,
+			model,
+			Enum.Material.Neon
+		)
+		lightOrb.Shape = Enum.PartType.Ball
+		registerAccent(plot, lightOrb, true)
+
+		local light = Instance.new("PointLight")
+		light.Color = Color3.fromRGB(255, 255, 255)
+		light.Range = 16
+		light.Brightness = 2
+		light.Parent = lightOrb
+	end
 
 	local prompt = Instance.new("ProximityPrompt")
 	prompt.ActionText = "Claim This Team"
@@ -798,22 +1066,8 @@ local function createBasePlot(index)
 	prompt.MaxActivationDistance = 12
 	prompt.Parent = sign
 
-	local plot = {
-		index = index,
-		origin = origin,
-		color = color,
-		jerseyColor = color,
-		model = model,
-		sign = sign,
-		signLabel = label,
-		owner = nil,             -- userId
-		ownerPlayer = nil,       -- Player instance
-		currentFloor = 0,
-		dropperConnections = {}, -- [floorIndex] = true/false running flag
-		floorParts = {},         -- [floorIndex] = Model
-		accentParts = {},        -- parts that follow the jersey color
-		trophyLabel = nil,
-	}
+	plot.sign = sign
+	plot.signLabel = label
 
 	-- ClaimPlotFn is a global function defined further down this script.
 	-- Lua looks up globals at call time, so this works fine even though
@@ -842,24 +1096,10 @@ local function buildFloor(plot, floorIndex)
 	floorModel.Parent = plot.model
 	plot.floorParts[floorIndex] = floorModel
 
-	local platform = newPart(
-		Vector3.new(PLOT_SIZE, 1, PLOT_SIZE),
-		origin * CFrame.new(0, y, 0),
-		plot.color,
-		floorModel
-	)
-	platform.Name = "Platform"
-
-	local wallHeight = FLOOR_HEIGHT - 2
-	local wallY = y + 0.5 + wallHeight / 2
 	local half = PLOT_SIZE / 2
+	buildFloorShell(floorModel, origin, y, half, plot, floorIndex)
 
-	newPart(Vector3.new(PLOT_SIZE, wallHeight, 1), origin * CFrame.new(0, wallY, -half), BrickColor.new("Institutional white"), floorModel)
-	newPart(Vector3.new(PLOT_SIZE, wallHeight, 1), origin * CFrame.new(0, wallY, half), BrickColor.new("Institutional white"), floorModel)
-	newPart(Vector3.new(1, wallHeight, PLOT_SIZE), origin * CFrame.new(-half, wallY, 0), BrickColor.new("Institutional white"), floorModel)
-	newPart(Vector3.new(1, wallHeight, PLOT_SIZE), origin * CFrame.new(half, wallY, 0), BrickColor.new("Institutional white"), floorModel)
-
-	local labelPart = newPart(Vector3.new(1, 1, 1), origin * CFrame.new(0, y + wallHeight + 1.5, -half + 1), plot.color, floorModel)
+	local labelPart = newPart(Vector3.new(1, 1, 1), origin * CFrame.new(0, y + FLOOR_HEIGHT - 0.5, -half + 1), plot.color, floorModel)
 	labelPart.Transparency = 1
 	labelPart.CanCollide = false
 	newBillboard(labelPart, "Floor " .. floorIndex .. ": " .. cfg.name, 260)
@@ -926,15 +1166,33 @@ local function buildFloor(plot, floorIndex)
 	----------------------------------------------------------------
 	-- DROPPER
 	----------------------------------------------------------------
+	local dropperBase = newPart(
+		Vector3.new(8, 0.4, 8),
+		origin * CFrame.new(-half + 8, y + 0.7, -half + 8),
+		BrickColor.new("Really black"),
+		floorModel,
+		Enum.Material.Metal
+	)
+	dropperBase.Shape = Enum.PartType.Cylinder
+	dropperBase.Orientation = Vector3.new(0, 0, 90)
+
 	local dropperPad = newPart(
-		Vector3.new(6, 1, 6),
+		Vector3.new(0.6, 6, 6),
 		origin * CFrame.new(-half + 8, y + 1, -half + 8),
 		BrickColor.new("Gold"),
 		floorModel,
 		Enum.Material.Neon
 	)
 	dropperPad.Name = "Dropper"
+	dropperPad.Shape = Enum.PartType.Cylinder
+	dropperPad.Orientation = Vector3.new(0, 0, 90)
 	newBillboard(dropperPad, "Income Dropper", 150)
+
+	local dropperLight = Instance.new("PointLight")
+	dropperLight.Color = Color3.fromRGB(255, 221, 120)
+	dropperLight.Range = 14
+	dropperLight.Brightness = 2.5
+	dropperLight.Parent = dropperPad
 
 	local floorState = {
 		bonus = 0, -- extra income from purchased upgrades on this floor
@@ -964,17 +1222,30 @@ local function buildFloor(plot, floorIndex)
 				data.TotalEarned += amount
 				spawnAutoCollectVFX(dropperPad, amount)
 			else
+				-- Floats in place (Anchored) instead of physically falling, so it
+				-- can never clip through the floor before a player can reach it.
 				local ball = Instance.new("Part")
 				ball.Shape = Enum.PartType.Ball
-				ball.Size = Vector3.new(2, 2, 2)
-				ball.CFrame = dropperPad.CFrame + Vector3.new(0, 3, 0)
-				ball.BrickColor = BrickColor.new("New Yeller")
+				ball.Size = Vector3.new(2.6, 1.7, 1.7)
+				local restCFrame = dropperPad.CFrame * CFrame.new(0, 4, 0)
+				ball.CFrame = restCFrame
+				ball.BrickColor = BrickColor.new("Reddish brown")
 				ball.Material = Enum.Material.Neon
-				ball.Anchored = false
+				ball.Anchored = true
 				ball.CanCollide = false
 				ball.Parent = floorModel
 				newBillboard(ball, formatCash(amount), 90)
 				playSound(SOUND_IDS.CashCollect, ball, 0.25, false)
+
+				local spinConn
+				spinConn = RunService.Heartbeat:Connect(function()
+					if not ball.Parent then
+						spinConn:Disconnect()
+						return
+					end
+					local t = os.clock()
+					ball.CFrame = restCFrame * CFrame.new(0, math.sin(t * 3) * 0.6, 0) * CFrame.Angles(0, t * 2, 0)
+				end)
 
 				local collected = false
 				local conn
@@ -1262,16 +1533,43 @@ local function buildWelcomeArch(centerX)
 	archModel.Name = "WelcomeArch"
 	archModel.Parent = Workspace
 
-	newPart(Vector3.new(2, 20, 2), CFrame.new(centerX - 15, 10, -PLOT_SIZE / 2 - 45), BrickColor.new("Really black"), archModel, Enum.Material.Metal)
-	newPart(Vector3.new(2, 20, 2), CFrame.new(centerX + 15, 10, -PLOT_SIZE / 2 - 45), BrickColor.new("Really black"), archModel, Enum.Material.Metal)
-	local topBeam = newPart(Vector3.new(34, 3, 2), CFrame.new(centerX, 20, -PLOT_SIZE / 2 - 45), BrickColor.new("Bright red"), archModel, Enum.Material.Neon)
-	newBillboard(topBeam, "\xF0\x9F\x8F\x88 NFL FRANCHISE TYCOON \xF0\x9F\x8F\x88", 500)
+	local archZ = -PLOT_SIZE / 2 - 45
+	local gold = BrickColor.new("New Yeller")
 
-	newPart(Vector3.new(20, 1, 20), CFrame.new(centerX, 0.5, -PLOT_SIZE / 2 - 45), BrickColor.new("Earth green"), archModel, Enum.Material.Grass)
+	-- Plaza floor: dark concrete with a glowing gold ring inlay
+	newPart(Vector3.new(46, 1, 46), CFrame.new(centerX, 0.5, archZ), BrickColor.new("Smoky grey"), archModel, Enum.Material.Concrete)
+	local ring = newPart(Vector3.new(1, 34, 34), CFrame.new(centerX, 1.05, archZ), gold, archModel, Enum.Material.Neon)
+	ring.Shape = Enum.PartType.Cylinder
+	ring.Orientation = Vector3.new(0, 0, 90)
+	local ringCore = newPart(Vector3.new(1, 32, 32), CFrame.new(centerX, 1.06, archZ), BrickColor.new("Smoky grey"), archModel, Enum.Material.Concrete)
+	ringCore.Shape = Enum.PartType.Cylinder
+	ringCore.Orientation = Vector3.new(0, 0, 90)
+
+	-- Twin pillars with a glowing marquee crossbar
+	for _, side in ipairs({ -1, 1 }) do
+		local pillarX = centerX + side * 16
+		newPart(Vector3.new(3, 24, 3), CFrame.new(pillarX, 12, archZ), BrickColor.new("Dark stone grey"), archModel, Enum.Material.Metal)
+		local cap = newPart(Vector3.new(3.6, 0.6, 3.6), CFrame.new(pillarX, 24.3, archZ), gold, archModel, Enum.Material.Neon)
+		cap.Shape = Enum.PartType.Cylinder
+		cap.Orientation = Vector3.new(0, 0, 90)
+
+		local flagPole = newPart(Vector3.new(0.3, 10, 0.3), CFrame.new(pillarX, 26, archZ), BrickColor.new("Dark stone grey"), archModel, Enum.Material.Metal)
+		local flag = newPart(Vector3.new(0.15, 4, 6), CFrame.new(pillarX + side * 3, 29, archZ), BrickColor.new("Bright red"), archModel, Enum.Material.SmoothPlastic)
+	end
+
+	local marquee = newPart(Vector3.new(38, 5, 2), CFrame.new(centerX, 22, archZ), BrickColor.new("Really black"), archModel, Enum.Material.Metal)
+	local marqueeGlow = newPart(Vector3.new(36, 3.4, 0.4), CFrame.new(centerX, 22, archZ - 1.2), gold, archModel, Enum.Material.Neon)
+	newBillboard(marqueeGlow, "\xF0\x9F\x8F\x88 NFL FRANCHISE TYCOON \xF0\x9F\x8F\x88", 560)
+
+	local spotLight = Instance.new("PointLight")
+	spotLight.Color = Color3.fromRGB(255, 230, 150)
+	spotLight.Range = 40
+	spotLight.Brightness = 3
+	spotLight.Parent = marqueeGlow
 
 	local spawnLocation = Instance.new("SpawnLocation")
-	spawnLocation.Size = Vector3.new(8, 1, 8)
-	spawnLocation.CFrame = CFrame.new(centerX, 1, -PLOT_SIZE / 2 - 40)
+	spawnLocation.Size = Vector3.new(10, 1, 10)
+	spawnLocation.CFrame = CFrame.new(centerX, 1, archZ + 8)
 	spawnLocation.Anchored = true
 	spawnLocation.CanCollide = true
 	spawnLocation.Transparency = 1
@@ -1282,9 +1580,29 @@ local function buildWelcomeArch(centerX)
 end
 
 local function buildLeaderboardBoard(position)
-	local board = newPart(Vector3.new(20, 12, 1), CFrame.new(position), BrickColor.new("Really black"), Workspace, Enum.Material.Metal)
+	local standModel = Instance.new("Model")
+	standModel.Name = "LeaderboardStand"
+	standModel.Parent = Workspace
+
+	local boardCFrame = CFrame.new(position)
+
+	-- Support legs, running from the ground up to the board
+	for _, side in ipairs({ -1, 1 }) do
+		newPart(
+			Vector3.new(1.2, position.Y, 1.2),
+			boardCFrame * CFrame.new(side * 8, -position.Y / 2, 0),
+			BrickColor.new("Dark stone grey"),
+			standModel,
+			Enum.Material.Metal
+		)
+	end
+
+	-- Frame + screen
+	local frame = newPart(Vector3.new(22, 13, 1.4), boardCFrame, BrickColor.new("Really black"), standModel, Enum.Material.Metal)
+	local trim = newPart(Vector3.new(22.6, 13.6, 0.6), boardCFrame * CFrame.new(0, 0, 0.5), BrickColor.new("New Yeller"), standModel, Enum.Material.Neon)
+
+	local board = newPart(Vector3.new(20, 12, 1), boardCFrame * CFrame.new(0, 0, -0.3), BrickColor.new("Really black"), standModel, Enum.Material.Metal)
 	board.Name = "LeaderboardBoard"
-	board.Anchored = true
 
 	local surfaceGui = Instance.new("SurfaceGui")
 	surfaceGui.Face = Enum.NormalId.Front
@@ -1293,7 +1611,7 @@ local function buildLeaderboardBoard(position)
 
 	local label = Instance.new("TextLabel")
 	label.Size = UDim2.new(1, 0, 1, 0)
-	label.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
+	label.BackgroundColor3 = Color3.fromRGB(8, 10, 14)
 	label.TextColor3 = Color3.fromRGB(255, 215, 0)
 	label.Font = Enum.Font.GothamBold
 	label.TextScaled = true
@@ -1301,7 +1619,7 @@ local function buildLeaderboardBoard(position)
 	label.Parent = surfaceGui
 
 	table.insert(boardLabels, label)
-	return board
+	return standModel
 end
 
 ----------------------------------------------------------------
