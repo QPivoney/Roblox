@@ -203,38 +203,39 @@ remotes.GetLeaderboardTop = getLeaderboardFn
 -- STADIUM ATMOSPHERE (global lighting mood, one-time setup)
 ----------------------------------------------------------------
 
-Lighting.ClockTime = 19
-Lighting.Brightness = 2.5
-Lighting.Ambient = Color3.fromRGB(35, 38, 50)
-Lighting.OutdoorAmbient = Color3.fromRGB(60, 65, 85)
+-- Bright, clear midday — a sunny game-day look rather than a dusk/night one.
+Lighting.ClockTime = 13.5
+Lighting.Brightness = 3
+Lighting.Ambient = Color3.fromRGB(140, 145, 150)
+Lighting.OutdoorAmbient = Color3.fromRGB(180, 190, 200)
 Lighting.EnvironmentSpecularScale = 1
-Lighting.EnvironmentDiffuseScale = 0.35
+Lighting.EnvironmentDiffuseScale = 0.3
 Lighting.ShadowSoftness = 0.2
 
 local atmosphere = Instance.new("Atmosphere")
-atmosphere.Density = 0.3
-atmosphere.Offset = 0.25
-atmosphere.Color = Color3.fromRGB(199, 170, 135)
-atmosphere.Decay = Color3.fromRGB(92, 60, 25)
-atmosphere.Glare = 0.2
-atmosphere.Haze = 1.5
+atmosphere.Density = 0.15
+atmosphere.Offset = 0.2
+atmosphere.Color = Color3.fromRGB(235, 245, 255)
+atmosphere.Decay = Color3.fromRGB(155, 180, 205)
+atmosphere.Glare = 0.1
+atmosphere.Haze = 0.4
 atmosphere.Parent = Lighting
 
 local colorCorrection = Instance.new("ColorCorrectionEffect")
 colorCorrection.Saturation = 0.2
-colorCorrection.Contrast = 0.08
-colorCorrection.TintColor = Color3.fromRGB(245, 250, 255)
+colorCorrection.Contrast = 0.06
+colorCorrection.TintColor = Color3.fromRGB(255, 255, 255)
 colorCorrection.Parent = Lighting
 
 local bloom = Instance.new("BloomEffect")
-bloom.Intensity = 0.55
+bloom.Intensity = 0.4
 bloom.Size = 24
-bloom.Threshold = 1.1
+bloom.Threshold = 1.3
 bloom.Parent = Lighting
 
 local sunRays = Instance.new("SunRaysEffect")
-sunRays.Intensity = 0.15
-sunRays.Spread = 0.5
+sunRays.Intensity = 0.2
+sunRays.Spread = 0.6
 sunRays.Parent = Lighting
 
 ----------------------------------------------------------------
@@ -1195,8 +1196,73 @@ local function buildFloor(plot, floorIndex)
 	dropperLight.Parent = dropperPad
 
 	local floorState = {
-		bonus = 0, -- extra income from purchased upgrades on this floor
+		bonus = 0,   -- extra income from purchased upgrades on this floor
+		pending = 0, -- cash that has accrued but hasn't been collected yet
 	}
+
+	-- The pile that represents accrued, uncollected cash. It floats in place
+	-- (Anchored) and just grows/shrinks/hides itself — nothing here is timed
+	-- or destroyed, so income keeps accumulating even while you're away.
+	local restCFrame = dropperPad.CFrame * CFrame.new(0, 4, 0)
+	local baseSize = Vector3.new(2.6, 1.7, 1.7)
+	local pendingPile = Instance.new("Part")
+	pendingPile.Shape = Enum.PartType.Ball
+	pendingPile.Size = baseSize
+	pendingPile.CFrame = restCFrame
+	pendingPile.BrickColor = BrickColor.new("Reddish brown")
+	pendingPile.Material = Enum.Material.Neon
+	pendingPile.Anchored = true
+	pendingPile.CanCollide = false
+	pendingPile.Transparency = 1
+	pendingPile.Parent = floorModel
+	local _, pendingLabel = newBillboard(pendingPile, "", 130)
+
+	local spinConn
+	spinConn = RunService.Heartbeat:Connect(function()
+		if not pendingPile.Parent then
+			spinConn:Disconnect()
+			return
+		end
+		local t = os.clock()
+		pendingPile.CFrame = restCFrame * CFrame.new(0, math.sin(t * 2) * 0.5, 0) * CFrame.Angles(0, t * 1.5, 0)
+	end)
+
+	local function updatePendingVisual()
+		if floorState.pending <= 0 then
+			pendingPile.Transparency = 1
+			pendingLabel.Text = ""
+		else
+			pendingPile.Transparency = 0
+			local scale = math.clamp(1 + math.log(floorState.pending + 1, 10) * 0.3, 1, 2.2)
+			pendingPile.Size = baseSize * scale
+			pendingLabel.Text = formatCash(floorState.pending) .. "\nCollect!"
+		end
+	end
+
+	local collectPrompt = Instance.new("ProximityPrompt")
+	collectPrompt.ActionText = "Collect Cash"
+	collectPrompt.ObjectText = "Income Dropper"
+	collectPrompt.HoldDuration = 0
+	collectPrompt.MaxActivationDistance = 10
+	collectPrompt.Parent = dropperPad
+
+	collectPrompt.Triggered:Connect(function(player)
+		if plot.owner ~= player.UserId then return end
+		if floorState.pending <= 0 then return end
+
+		local stats = player:FindFirstChild("leaderstats")
+		if not stats then return end
+
+		local collected = floorState.pending
+		stats.Cash.Value += collected
+		local data = dataByUserId[player.UserId]
+		if data then
+			data.TotalEarned += collected
+		end
+		floorState.pending = 0
+		updatePendingVisual()
+		playSound(SOUND_IDS.CashCollect, dropperPad, 0.4, false)
+	end)
 
 	plot.dropperConnections[floorIndex] = true
 	task.spawn(function()
@@ -1222,52 +1288,8 @@ local function buildFloor(plot, floorIndex)
 				data.TotalEarned += amount
 				spawnAutoCollectVFX(dropperPad, amount)
 			else
-				-- Floats in place (Anchored) instead of physically falling, so it
-				-- can never clip through the floor before a player can reach it.
-				local ball = Instance.new("Part")
-				ball.Shape = Enum.PartType.Ball
-				ball.Size = Vector3.new(2.6, 1.7, 1.7)
-				local restCFrame = dropperPad.CFrame * CFrame.new(0, 4, 0)
-				ball.CFrame = restCFrame
-				ball.BrickColor = BrickColor.new("Reddish brown")
-				ball.Material = Enum.Material.Neon
-				ball.Anchored = true
-				ball.CanCollide = false
-				ball.Parent = floorModel
-				newBillboard(ball, formatCash(amount), 90)
-				playSound(SOUND_IDS.CashCollect, ball, 0.25, false)
-
-				local spinConn
-				spinConn = RunService.Heartbeat:Connect(function()
-					if not ball.Parent then
-						spinConn:Disconnect()
-						return
-					end
-					local t = os.clock()
-					ball.CFrame = restCFrame * CFrame.new(0, math.sin(t * 3) * 0.6, 0) * CFrame.Angles(0, t * 2, 0)
-				end)
-
-				local collected = false
-				local conn
-				conn = ball.Touched:Connect(function(hit)
-					if collected then return end
-					local char = hit.Parent
-					local plr = Players:GetPlayerFromCharacter(char)
-					if plr and plot.owner == plr.UserId then
-						collected = true
-						local s = plr:FindFirstChild("leaderstats")
-						if s then
-							s.Cash.Value += amount
-						end
-						local d = dataByUserId[plr.UserId]
-						if d then
-							d.TotalEarned += amount
-						end
-						conn:Disconnect()
-						ball:Destroy()
-					end
-				end)
-				Debris:AddItem(ball, 15) -- despawn if left uncollected
+				floorState.pending += amount
+				updatePendingVisual()
 			end
 		end
 	end)
@@ -1535,30 +1557,31 @@ local function buildWelcomeArch(centerX)
 
 	local archZ = -PLOT_SIZE / 2 - 45
 	local gold = BrickColor.new("New Yeller")
+	local groundY = BASE_HEIGHT -- match the plot pads' top surface so nothing floats or sinks
 
 	-- Plaza floor: dark concrete with a glowing gold ring inlay
-	newPart(Vector3.new(46, 1, 46), CFrame.new(centerX, 0.5, archZ), BrickColor.new("Smoky grey"), archModel, Enum.Material.Concrete)
-	local ring = newPart(Vector3.new(1, 34, 34), CFrame.new(centerX, 1.05, archZ), gold, archModel, Enum.Material.Neon)
+	newPart(Vector3.new(46, BASE_HEIGHT, 46), CFrame.new(centerX, groundY / 2, archZ), BrickColor.new("Smoky grey"), archModel, Enum.Material.Concrete)
+	local ring = newPart(Vector3.new(1, 34, 34), CFrame.new(centerX, groundY + 0.05, archZ), gold, archModel, Enum.Material.Neon)
 	ring.Shape = Enum.PartType.Cylinder
 	ring.Orientation = Vector3.new(0, 0, 90)
-	local ringCore = newPart(Vector3.new(1, 32, 32), CFrame.new(centerX, 1.06, archZ), BrickColor.new("Smoky grey"), archModel, Enum.Material.Concrete)
+	local ringCore = newPart(Vector3.new(1, 32, 32), CFrame.new(centerX, groundY + 0.06, archZ), BrickColor.new("Smoky grey"), archModel, Enum.Material.Concrete)
 	ringCore.Shape = Enum.PartType.Cylinder
 	ringCore.Orientation = Vector3.new(0, 0, 90)
 
 	-- Twin pillars with a glowing marquee crossbar
 	for _, side in ipairs({ -1, 1 }) do
 		local pillarX = centerX + side * 16
-		newPart(Vector3.new(3, 24, 3), CFrame.new(pillarX, 12, archZ), BrickColor.new("Dark stone grey"), archModel, Enum.Material.Metal)
-		local cap = newPart(Vector3.new(3.6, 0.6, 3.6), CFrame.new(pillarX, 24.3, archZ), gold, archModel, Enum.Material.Neon)
+		newPart(Vector3.new(3, 24, 3), CFrame.new(pillarX, groundY + 12, archZ), BrickColor.new("Dark stone grey"), archModel, Enum.Material.Metal)
+		local cap = newPart(Vector3.new(3.6, 0.6, 3.6), CFrame.new(pillarX, groundY + 24.3, archZ), gold, archModel, Enum.Material.Neon)
 		cap.Shape = Enum.PartType.Cylinder
 		cap.Orientation = Vector3.new(0, 0, 90)
 
-		local flagPole = newPart(Vector3.new(0.3, 10, 0.3), CFrame.new(pillarX, 26, archZ), BrickColor.new("Dark stone grey"), archModel, Enum.Material.Metal)
-		local flag = newPart(Vector3.new(0.15, 4, 6), CFrame.new(pillarX + side * 3, 29, archZ), BrickColor.new("Bright red"), archModel, Enum.Material.SmoothPlastic)
+		newPart(Vector3.new(0.3, 10, 0.3), CFrame.new(pillarX, groundY + 26, archZ), BrickColor.new("Dark stone grey"), archModel, Enum.Material.Metal)
+		newPart(Vector3.new(0.15, 4, 6), CFrame.new(pillarX + side * 3, groundY + 29, archZ), BrickColor.new("Bright red"), archModel, Enum.Material.SmoothPlastic)
 	end
 
-	local marquee = newPart(Vector3.new(38, 5, 2), CFrame.new(centerX, 22, archZ), BrickColor.new("Really black"), archModel, Enum.Material.Metal)
-	local marqueeGlow = newPart(Vector3.new(36, 3.4, 0.4), CFrame.new(centerX, 22, archZ - 1.2), gold, archModel, Enum.Material.Neon)
+	newPart(Vector3.new(38, 5, 2), CFrame.new(centerX, groundY + 22, archZ), BrickColor.new("Really black"), archModel, Enum.Material.Metal)
+	local marqueeGlow = newPart(Vector3.new(36, 3.4, 0.4), CFrame.new(centerX, groundY + 22, archZ - 1.2), gold, archModel, Enum.Material.Neon)
 	newBillboard(marqueeGlow, "\xF0\x9F\x8F\x88 NFL FRANCHISE TYCOON \xF0\x9F\x8F\x88", 560)
 
 	local spotLight = Instance.new("PointLight")
@@ -1569,7 +1592,7 @@ local function buildWelcomeArch(centerX)
 
 	local spawnLocation = Instance.new("SpawnLocation")
 	spawnLocation.Size = Vector3.new(10, 1, 10)
-	spawnLocation.CFrame = CFrame.new(centerX, 1, archZ + 8)
+	spawnLocation.CFrame = CFrame.new(centerX, groundY + 0.5, archZ + 8)
 	spawnLocation.Anchored = true
 	spawnLocation.CanCollide = true
 	spawnLocation.Transparency = 1
@@ -1577,6 +1600,96 @@ local function buildWelcomeArch(centerX)
 	spawnLocation.Parent = archModel
 
 	return archModel
+end
+
+----------------------------------------------------------------
+-- SCENERY (grass field + trees framing the whole complex)
+----------------------------------------------------------------
+
+local function randomRange(minVal, maxVal)
+	return minVal + math.random() * (maxVal - minVal)
+end
+
+local function buildTree(position)
+	local tree = Instance.new("Model")
+	tree.Name = "Tree"
+	tree.Parent = Workspace
+
+	local trunkHeight = randomRange(6, 10)
+	newPart(
+		Vector3.new(1.4, trunkHeight, 1.4),
+		CFrame.new(position.X, BASE_HEIGHT + trunkHeight / 2, position.Z),
+		BrickColor.new("Reddish brown"),
+		tree,
+		Enum.Material.Wood
+	)
+
+	local foliageNames = { "Earth green", "Dark green", "Camo" }
+	local foliageColor = BrickColor.new(foliageNames[math.random(1, #foliageNames)])
+	for i = 1, 3 do
+		local size = 7.5 - i * 1.4
+		local foliage = newPart(
+			Vector3.new(size, size, size),
+			CFrame.new(position.X, BASE_HEIGHT + trunkHeight + i * 1.6, position.Z),
+			foliageColor,
+			tree,
+			Enum.Material.Grass
+		)
+		foliage.Shape = Enum.PartType.Ball
+	end
+
+	return tree
+end
+
+local function buildRock(position)
+	return newPart(
+		Vector3.new(randomRange(2, 4), randomRange(1.5, 3), randomRange(2, 4)),
+		CFrame.new(position.X, BASE_HEIGHT + 1, position.Z) * CFrame.Angles(0, randomRange(0, 6.28), 0),
+		BrickColor.new("Medium stone grey"),
+		Workspace,
+		Enum.Material.Rock
+	)
+end
+
+local function scatterTrees(count, xMin, xMax, zMin, zMax)
+	for _ = 1, count do
+		buildTree(Vector3.new(randomRange(xMin, xMax), 0, randomRange(zMin, zMax)))
+	end
+end
+
+local function scatterRocks(count, xMin, xMax, zMin, zMax)
+	for _ = 1, count do
+		buildRock(Vector3.new(randomRange(xMin, xMax), 0, randomRange(zMin, zMax)))
+	end
+end
+
+-- A big grass field under and around the whole complex, framed with trees
+-- and rocks so the world doesn't just end in empty void past the buildings.
+local function buildGrounds(centerX)
+	local plotMinX = -80
+	local plotMaxX = (NUM_PLOTS - 1) * PLOT_SPACING + 80
+
+	local groundWidth = plotMaxX - plotMinX + 160
+	local groundDepth = 320
+	local groundCenterX = (plotMinX + plotMaxX) / 2
+	local groundCenterZ = -30
+
+	newPart(
+		Vector3.new(groundWidth, 4, groundDepth),
+		CFrame.new(groundCenterX, BASE_HEIGHT - 2, groundCenterZ),
+		BrickColor.new("Earth green"),
+		Workspace,
+		Enum.Material.Grass
+	)
+
+	scatterTrees(18, plotMinX, plotMaxX, 45, 95)               -- behind the buildings
+	scatterTrees(10, centerX - 110, centerX + 110, -140, -112) -- behind the plaza
+	scatterTrees(10, plotMinX - 45, plotMinX - 6, -110, 60)    -- west treeline
+	scatterTrees(10, plotMaxX + 6, plotMaxX + 45, -110, 60)    -- east treeline
+
+	scatterRocks(4, plotMinX, plotMaxX, 45, 95)
+	scatterRocks(3, plotMinX - 45, plotMinX - 6, -110, 60)
+	scatterRocks(3, plotMaxX + 6, plotMaxX + 45, -110, 60)
 end
 
 local function buildLeaderboardBoard(position)
@@ -1631,6 +1744,7 @@ for i = 1, NUM_PLOTS do
 end
 
 local centerX = ((NUM_PLOTS - 1) * PLOT_SPACING) / 2
+buildGrounds(centerX)
 buildWelcomeArch(centerX)
 buildLeaderboardBoard(Vector3.new(centerX, 7, -PLOT_SIZE / 2 - 65))
 
