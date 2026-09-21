@@ -115,18 +115,39 @@ class Portfolio:
         )
         self.closed_trades.append(trade)
 
-    def stats(self) -> dict:
+    def stats(self, mark_prices: dict[str, float] | None = None) -> dict:
+        """Win rate / R-multiple / profit factor come only from fully closed
+        round-trips (a partial fill has no completed R-multiple to report).
+        `total_pnl_usd` additionally folds in PnL already realized via
+        partial take-profits on positions that are still open — otherwise a
+        position that banked real profit at its 2x/5x targets but hasn't
+        fully closed yet would look like it made nothing. Pass mark_prices
+        to also fold in unrealized PnL on whatever is still open.
+        """
         trades = self.closed_trades
-        if not trades:
-            return {"trades": 0}
+        closed_pnl = sum(t.pnl_usd for t in trades)
+        open_realized_pnl = sum(pos.realized_pnl_usd for pos in self.positions.values())
+        open_unrealized_pnl = None
+        if mark_prices is not None:
+            open_unrealized_pnl = sum(
+                pos.unrealized_pnl_usd(mark_prices.get(key, pos.entry_price))
+                for key, pos in self.positions.items()
+            )
+
         wins = [t for t in trades if t.pnl_usd > 0]
         losses = [t for t in trades if t.pnl_usd <= 0]
         gross_win = sum(t.pnl_usd for t in wins)
         gross_loss = abs(sum(t.pnl_usd for t in losses))
-        return {
+
+        result = {
             "trades": len(trades),
-            "win_rate_pct": len(wins) / len(trades) * 100,
-            "avg_r": sum(t.r_multiple for t in trades) / len(trades),
-            "profit_factor": (gross_win / gross_loss) if gross_loss else float("inf"),
-            "total_pnl_usd": sum(t.pnl_usd for t in trades),
+            "win_rate_pct": (len(wins) / len(trades) * 100) if trades else None,
+            "avg_r": (sum(t.r_multiple for t in trades) / len(trades)) if trades else None,
+            "profit_factor": (gross_win / gross_loss) if gross_loss else (float("inf") if gross_win else None),
+            "closed_pnl_usd": closed_pnl,
+            "open_realized_pnl_usd": open_realized_pnl,
+            "total_pnl_usd": closed_pnl + open_realized_pnl + (open_unrealized_pnl or 0.0),
         }
+        if open_unrealized_pnl is not None:
+            result["open_unrealized_pnl_usd"] = open_unrealized_pnl
+        return result
