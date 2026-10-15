@@ -1,5 +1,8 @@
 # NFL Franchise Tycoon
 
+> This repo also contains **🎃 Roll a Pumpkin**, a "+1 Strength every second"
+> pumpkin-bowling game. See [`RollAPumpkin/README.md`](RollAPumpkin/README.md).
+
 A complete, self-building Roblox tycoon game. Drop two scripts into Studio and
 the whole world — plots, a stadium, a live leaderboard, shops, UI — builds
 itself at runtime. No external models, plugins, or Rojo setup required.
